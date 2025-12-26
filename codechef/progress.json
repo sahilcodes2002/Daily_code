@@ -1,0 +1,10 @@
+{
+  "difficulty_index": 3,
+  "page": 1,
+  "created_per_diff": {
+    "medium": 1200,
+    "hard": 457,
+    "easy": 2141
+  },
+  "total_created": 3798
+}

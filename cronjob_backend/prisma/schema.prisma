@@ -1,0 +1,165 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id               Int              @id @default(autoincrement())
+  username         String           @unique
+  name             String
+  isAdmin          Boolean          @default(false)
+  password         String
+  email            String?
+  dailymail        Boolean          @default(true)
+  created_at       DateTime         @default(now())
+
+  problems         Problems[]
+  problems_user    Problemtouser[]
+  allmails         Extrausermails[]
+  mailprops        usermailprops[]
+  problem_sent     ProblemsToUserWithDate[]
+}
+
+model Allmails {
+  id           Int              @id @default(autoincrement())
+  mail         String           @unique
+  mailstouser  Extrausermails[]
+}
+
+model Extrausermails {
+  id      Int @id @default(autoincrement())
+  user_id Int
+  mail_id Int
+
+  user User     @relation(fields: [user_id], references: [id])
+  mail Allmails @relation(fields: [mail_id], references: [id])
+
+  @@unique([user_id, mail_id])
+  @@index([user_id])
+}
+
+model Emailwithcode {
+  id    Int    @id @default(autoincrement())
+  email String @unique
+  code  String
+}
+
+model Tags {
+  id              Int               @id @default(autoincrement())
+  tag_name        String            @unique
+  tagged_problems Tagstoproblems[]
+  tagstomail      mailproblemTags[]
+}
+
+model Tagstoproblems {
+  id         Int @id @default(autoincrement())
+  tag_id     Int
+  problem_id Int
+
+  tags     Tags     @relation(fields: [tag_id], references: [id])
+  problems Problems @relation(fields: [problem_id], references: [id])
+
+  @@unique([tag_id, problem_id])
+  @@index([tag_id])
+  @@index([problem_id])
+}
+
+model Problems {
+  id             Int      @id @default(autoincrement())
+  problem_link   String
+  user_id_posted Int
+  difficulty     String   @default("A")
+  title          String
+
+  user User @relation(fields: [user_id_posted], references: [id])
+
+  problem_tags Tagstoproblems[]
+  problem_user Problemtouser[]
+  problem_sent ProblemsToUserWithDate[]
+
+  @@index([difficulty])
+  @@index([user_id_posted])
+  @@index([title])
+}
+
+model usermailprops {
+  id             Int @id @default(autoincrement())
+  user_id        Int @unique
+  problemsToMail Int @default(3)
+
+  user         User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  tags_choosen mailproblemTags[]
+
+  @@index([user_id])
+}
+
+model mailproblemTags {
+  id          Int @id @default(autoincrement())
+  mailprop_id Int
+  tag_id      Int
+
+  mailrelation usermailprops @relation(fields: [mailprop_id], references: [id], onDelete: Cascade)
+  tagrelation  Tags          @relation(fields: [tag_id], references: [id], onDelete: Cascade)
+
+  @@unique([mailprop_id, tag_id])
+  @@index([tag_id])
+}
+
+model Problemtouser {
+  id           Int      @id @default(autoincrement())
+  user_id      Int
+  problem_id   Int
+  solution     String   @default("")
+  Pattern      String   @default("")
+  mydifficulty String   @default("A")
+  best_time    Int      @default(0)
+  no_solved    Int      @default(0)
+  starred      Boolean  @default(false)
+  importance   Int      @default(0)
+  notes        String
+
+  comments Comments[]
+
+  problems Problems @relation(fields: [problem_id], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, problem_id])
+  @@index([user_id])
+  @@index([user_id, starred])
+  @@index([user_id, importance])
+}
+
+model ProblemsToUserWithDate {
+  id         Int      @id @default(autoincrement())
+  user_id    Int
+  problem_id Int
+  solved     Boolean  @default(false)
+  message    String   @default("")
+  created_at DateTime @default(now())
+
+  user    User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  problem Problems @relation(fields: [problem_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, problem_id])
+
+  @@index([user_id])
+  @@index([user_id, solved])
+  @@index([user_id, created_at])
+  @@index([user_id, solved, created_at])
+}
+
+model Comments {
+  id              Int @id @default(autoincrement())
+  comment         String
+  likes           Int @default(0)
+  problem_user_id Int
+
+  Problemtouser Problemtouser @relation(fields: [problem_user_id], references: [id], onDelete: Cascade)
+
+  @@index([problem_user_id])
+}
