@@ -28,7 +28,48 @@ async function jwtsign(username:string):Promise<string>{
 
 
 
+app.get('/test/:id', async (c) => {
+  const problemId = Number(c.req.param('id'));
 
+  const p = new Promise((resolve)=>{
+    setTimeout(()=>{
+      resolve(0);
+    }, 1000);
+  })
+
+  await p;
+      
+    return c.json({
+        userid: 1,
+        id:problemId,
+        title:"I am title",
+        body:"I am body"
+      });
+   
+})
+
+app.delete('/test/delete/:id', async (c) => {
+  const problemId = Number(c.req.param('id'));
+
+  const p = new Promise((resolve)=>{
+    setTimeout(()=>{
+      resolve(0);
+    }, 1000);
+  })
+
+  await p;
+
+  
+  return c.json({
+      success: true,
+      deleted:problemId,
+      userid: 1,
+      id:problemId,
+      title:"I am title",
+      body:"I am body"
+    });
+  
+})
 
 
 
@@ -2937,22 +2978,17 @@ app.patch('/problems/:problemId/solved', authtoken, async (c: any) => {
     }
 
     // Update ProblemsToUserWithDate entry
-    const existingEntry = await prisma.problemsToUserWithDate.findUnique({
+    const existingEntry = await prisma.problemsToUserWithDate.findFirst({
       where: {
-        user_id_problem_id: {
-          user_id: userId,
-          problem_id: parseInt(problemId),
-        },
+        user_id: userId,
+        problem_id: parseInt(problemId),
       },
     });
 
     if (existingEntry) {
       await prisma.problemsToUserWithDate.update({
         where: {
-          user_id_problem_id: {
-            user_id: userId,
-            problem_id: parseInt(problemId),
-          },
+          id: existingEntry.id,
         },
         data: {
           solved: body.solved,

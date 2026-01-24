@@ -1,7 +1,7 @@
 // utils/api.js
 import axios from 'axios';
 //https://dailycode.dailycode.workers.dev
-const API_BASE = 'https://dailycode.dailycode.workers.dev'; // Replace with your actual backend URL
+const API_BASE = 'http://127.0.0.1:8787'; // Replace with your actual backend URL
 
 const axiosInstance = axios.create({
   baseURL: API_BASE,

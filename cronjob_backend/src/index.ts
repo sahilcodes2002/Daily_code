@@ -5,7 +5,166 @@ import {env} from 'hono/adapter'
 import { cors } from 'hono/cors';
 import z, { any } from 'zod'
 
+// Tag Groups - selecting any tag expands to all tags in the group
+const TAG_GROUPS: Record<string, string[]> = {
+  "Dynamic Programming": [
+    "Dynamic Programming", "DP", "dp", "Memoization", "Tabulation",
+    "Bitmask DP", "Digit DP", "Tree DP", "DP on Trees", "Interval DP",
+    "Knapsack", "LCS", "LIS", "Matrix Chain Multiplication", "State Compression"
+  ],
+  "Graph Basics": [
+    "Graphs", "Graph", "BFS", "DFS", "Breadth First Search", "Depth First Search",
+    "Graph Traversal", "Connected Components", "Bipartite", "Bipartite Graph",
+    "Cycle Detection", "Topological Sort", "Topological Sorting"
+  ],
+  "Shortest Path": [
+    "Shortest Path", "Dijkstra", "Bellman-Ford", "Floyd-Warshall", "SSSP",
+    "All Pairs Shortest Path", "0-1 BFS"
+  ],
+  "Trees": [
+    "Trees", "Tree", "Binary Tree", "BST", "Binary Search Tree", "N-ary Tree",
+    "Tree Traversal", "LCA", "Lowest Common Ancestor", "Tree Diameter",
+    "Centroid Decomposition", "Heavy-Light Decomposition", "HLD", "Euler Tour"
+  ],
+  "Advanced Graphs": [
+    "MST", "Minimum Spanning Tree", "Kruskal", "Prim", "DSU", "Disjoint Set Union",
+    "Union Find", "Strongly Connected Components", "SCC", "Tarjan", "Kosaraju",
+    "Bridges", "Articulation Points", "Network Flow", "Max Flow", "Min Cut",
+    "Bipartite Matching", "Hungarian Algorithm"
+  ],
+  "Strings": [
+    "Strings", "String", "String Matching", "Pattern Matching", "KMP",
+    "Knuth-Morris-Pratt", "Z-Algorithm", "Z Function", "Rabin-Karp", "Hashing",
+    "String Hashing", "Rolling Hash", "Manacher", "Palindrome"
+  ],
+  "Advanced Strings": [
+    "Trie", "Suffix Array", "Suffix Tree", "Aho-Corasick", "Suffix Automaton"
+  ],
+  "Binary Search": [
+    "Binary Search", "Bisection", "Binary Search on Answer", "Ternary Search",
+    "Parametric Search"
+  ],
+  "Sorting & Searching": [
+    "Sorting", "Searching", "Merge Sort", "Quick Sort", "Counting Sort",
+    "Radix Sort", "Bucket Sort", "Two Pointers", "Two-Pointers", "Sliding Window"
+  ],
+  "Data Structures": [
+    "Data Structures", "Stack", "Queue", "Deque", "Priority Queue", "Heap",
+    "Min Heap", "Max Heap", "Linked List", "Doubly Linked List"
+  ],
+  "Advanced Data Structures": [
+    "Segment Tree", "Segment Trees", "Fenwick Tree", "BIT", "Binary Indexed Tree",
+    "Sparse Table", "Mo's Algorithm", "Mo Algorithm", "Sqrt Decomposition",
+    "Block Decomposition", "Persistent Data Structures", "Treap", "Splay Tree"
+  ],
+  "Number Theory": [
+    "Number Theory", "Math", "Mathematics", "Prime", "Primes", "Sieve",
+    "Sieve of Eratosthenes", "Prime Factorization", "GCD", "LCM", "Euclidean Algorithm",
+    "Extended Euclidean", "Modular Arithmetic", "Modular Inverse", "Fermat's Little Theorem",
+    "Chinese Remainder Theorem", "CRT", "Euler's Totient", "Phi Function"
+  ],
+  "Combinatorics": [
+    "Combinatorics", "Permutation", "Permutations", "Combination", "Combinations",
+    "nCr", "nPr", "Factorial", "Binomial Coefficient", "Pascal's Triangle",
+    "Inclusion-Exclusion", "Pigeonhole Principle", "Catalan Numbers", "Derangements"
+  ],
+  "Geometry": [
+    "Geometry", "Computational Geometry", "Convex Hull", "Line Intersection",
+    "Point in Polygon", "Polygon Area", "Graham Scan", "Jarvis March",
+    "Closest Pair of Points", "Sweep Line", "Line Sweep"
+  ],
+  "Greedy": [
+    "Greedy", "Greedy Algorithm", "Greedy Algorithms", "Activity Selection",
+    "Interval Scheduling", "Huffman Coding"
+  ],
+  "Divide & Conquer": [
+    "Divide and Conquer", "Divide & Conquer", "D&C", "Merge Sort", "Quick Select",
+    "Closest Pair", "Strassen's Algorithm"
+  ],
+  "Backtracking": [
+    "Backtracking", "Recursion", "Recursive", "Brute Force", "Enumeration",
+    "Generate Subsets", "Generate Permutations", "N-Queens", "Sudoku Solver"
+  ],
+  "Bit Manipulation": [
+    "Bit Manipulation", "Bitwise", "Bitmask", "Bitmasking", "XOR", "AND", "OR",
+    "Bit Operations", "Binary Representation"
+  ],
+  "Game Theory": [
+    "Game Theory", "Nim", "Sprague-Grundy", "Minimax", "Alpha-Beta Pruning",
+    "Winning/Losing States"
+  ],
+  "Matrix": [
+    "Matrix", "Matrix Exponentiation", "Matrix Multiplication", "Gaussian Elimination",
+    "Linear Algebra", "Determinant", "Matrix Inverse"
+  ],
+  "Probability & Statistics": [
+    "Probability", "Expected Value", "Random", "Randomized Algorithm",
+    "Monte Carlo", "Las Vegas Algorithm"
+  ],
+  "Interactive": [
+    "Interactive", "Interactive Problem", "Query", "Online Algorithm"
+  ],
+  "Constructive": [
+    "Constructive", "Constructive Algorithms", "Construction", "Ad-hoc", "Adhoc"
+  ],
+  "Implementation": [
+    "Implementation", "Simulation", "Brute Force Implementation"
+  ],
+  "Arrays & Hashing": [
+    "Array", "Arrays", "Hash Table", "Hash Map", "HashMap", "HashSet",
+    "Prefix Sum", "Prefix Sums", "Difference Array", "Frequency Count"
+  ],
+  "Range Queries": [
+    "Range Queries", "Range Query", "RMQ", "Range Minimum Query",
+    "Range Sum Query", "Range Update"
+  ],
+  "Others": [
+    "Bitmasks", "Meet in the Middle", "FFT", "Fast Fourier Transform", "NTT",
+    "Number Theoretic Transform", "Pollard Rho", "Miller-Rabin", "Expression Parsing",
+    "DP optimization", "Aliens Trick", "Lagrange Interpolation", "Burnside's Lemma",
+    "Lucas Theorem", "Mobius Function", "Link Cut Tree", "2-SAT", "Flows",
+    "Matching", "Hall's Theorem", "Dilworth's Theorem", "Sprague Grundy",
+    "Offline Queries", "Online Queries", "CDQ Divide and Conquer",
+    "basics", "basic", "beginner", "easy", "medium", "hard",
+    "codeforces", "leetcode", "codechef", "atcoder", "spoj", "hackerrank", "hackerearth"
+  ]
+};
 
+// Expand user's selected tags to include all tags from their groups
+// Returns undefined if any "Others" tag is selected (fetch all problems)
+// Returns expanded tag names array otherwise
+function expandTagsToGroups(selectedTagNames: string[]): string[] | undefined {
+  const expandedTags = new Set<string>();
+  
+  for (const tagName of selectedTagNames) {
+    let foundInGroup = false;
+    
+    // Check each group for this tag
+    for (const [groupName, groupTags] of Object.entries(TAG_GROUPS)) {
+      const lowerGroupTags = groupTags.map(t => t.toLowerCase());
+      
+      if (lowerGroupTags.includes(tagName.toLowerCase())) {
+        foundInGroup = true;
+        
+        // If tag belongs to "Others" group, return undefined to fetch all
+        if (groupName === "Others") {
+          return undefined;
+        }
+        
+        // Add all tags from this group
+        groupTags.forEach(t => expandedTags.add(t.toLowerCase()));
+        break;
+      }
+    }
+    
+    // If tag not in any group, use it as-is
+    if (!foundInGroup) {
+      expandedTags.add(tagName.toLowerCase());
+    }
+  }
+  
+  return Array.from(expandedTags);
+}
 
 const app = new Hono();
 app.use(cors());
@@ -41,6 +200,8 @@ app.post('/tosendworks', async (c) => {
 
       const problemsToMail = user.mailprops?.[0]?.problemsToMail ?? 3;
       const selectedTagIds = user.mailprops?.[0]?.tags_choosen.map(t => t.tag_id) ?? [];
+      const selectedTagNames = user.mailprops?.[0]?.tags_choosen.map(t => t.tagrelation.tag_name) ?? [];
+      const hasSelectedTags = selectedTagIds.length > 0;
 
       const solvedRecently = await prisma.problemsToUserWithDate.findMany({
         where: {
@@ -53,12 +214,23 @@ app.post('/tosendworks', async (c) => {
 
       const solvedIds = solvedRecently.map(p => p.problem_id);
 
+      // Expand tags to groups - returns undefined if "Others" tag selected
+      const expandedTagNames = hasSelectedTags ? expandTagsToGroups(selectedTagNames) : undefined;
+      
+      // If no tags selected OR any "Others" tag selected, fetch all problems (no filter)
+      let tagFilter: { some: { tags: { tag_name: { in: string[], mode: 'insensitive' } } } } | undefined = undefined;
+      
+      if (hasSelectedTags && expandedTagNames !== undefined) {
+        // Use expanded tags for filtering (case-insensitive)
+        tagFilter = { some: { tags: { tag_name: { in: expandedTagNames, mode: 'insensitive' } } } };
+      }
+
       // ---------------- A. USER POSTED ----------------
       const userPosted = await prisma.problems.findMany({
         where: {
           user_id_posted: userId,
           id: { notIn: solvedIds },
-          problem_tags: { some: { tag_id: { in: selectedTagIds } } },
+          ...(tagFilter && { problem_tags: tagFilter }),
         },
         take: problemsToMail,
         include: { problem_tags: { include: { tags: true } } },
@@ -70,7 +242,7 @@ app.post('/tosendworks', async (c) => {
       const randomProblems = await prisma.problems.findMany({
         where: {
           id: { notIn: [...usedIds, ...solvedIds] },
-          problem_tags: { some: { tag_id: { in: selectedTagIds } } },
+          ...(tagFilter && { problem_tags: tagFilter }),
         },
         take: problemsToMail,
         include: { problem_tags: { include: { tags: true } } },
@@ -124,7 +296,6 @@ app.post('/tosendworks', async (c) => {
           problem_id: p.id,
           solved: false,
         })),
-        skipDuplicates: true,
       });
 
       // ---------------- PREP MAIL PAYLOAD ----------------
@@ -403,6 +574,8 @@ async function handleScheduled() {
 
       const problemsToMail = user.mailprops?.[0]?.problemsToMail ?? 3;
       const selectedTagIds = user.mailprops?.[0]?.tags_choosen.map(t => t.tag_id) ?? [];
+      const selectedTagNames = user.mailprops?.[0]?.tags_choosen.map(t => t.tagrelation.tag_name) ?? [];
+      const hasSelectedTags = selectedTagIds.length > 0;
 
       const solvedRecently = await prisma.problemsToUserWithDate.findMany({
         where: {
@@ -415,12 +588,23 @@ async function handleScheduled() {
 
       const solvedIds = solvedRecently.map(p => p.problem_id);
 
+      // Expand tags to groups - returns undefined if "Others" tag selected
+      const expandedTagNames = hasSelectedTags ? expandTagsToGroups(selectedTagNames) : undefined;
+      
+      // If no tags selected OR any "Others" tag selected, fetch all problems (no filter)
+      let tagFilter: { some: { tags: { tag_name: { in: string[], mode: 'insensitive' } } } } | undefined = undefined;
+      
+      if (hasSelectedTags && expandedTagNames !== undefined) {
+        // Use expanded tags for filtering (case-insensitive)
+        tagFilter = { some: { tags: { tag_name: { in: expandedTagNames, mode: 'insensitive' } } } };
+      }
+
       // ---------------- A. USER POSTED ----------------
       const userPosted = await prisma.problems.findMany({
         where: {
           user_id_posted: userId,
           id: { notIn: solvedIds },
-          problem_tags: { some: { tag_id: { in: selectedTagIds } } },
+          ...(tagFilter && { problem_tags: tagFilter }),
         },
         take: problemsToMail,
         include: { problem_tags: { include: { tags: true } } },
@@ -432,7 +616,7 @@ async function handleScheduled() {
       const randomProblems = await prisma.problems.findMany({
         where: {
           id: { notIn: [...usedIds, ...solvedIds] },
-          problem_tags: { some: { tag_id: { in: selectedTagIds } } },
+          ...(tagFilter && { problem_tags: tagFilter }),
         },
         take: problemsToMail,
         include: { problem_tags: { include: { tags: true } } },
@@ -486,7 +670,6 @@ async function handleScheduled() {
           problem_id: p.id,
           solved: false,
         })),
-        skipDuplicates: true,
       });
 
       // ---------------- PREP MAIL PAYLOAD ----------------

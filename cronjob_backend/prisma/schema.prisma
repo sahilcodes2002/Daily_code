@@ -145,8 +145,6 @@ model ProblemsToUserWithDate {
   user    User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
   problem Problems @relation(fields: [problem_id], references: [id], onDelete: Cascade)
 
-  @@unique([user_id, problem_id])
-
   @@index([user_id])
   @@index([user_id, solved])
   @@index([user_id, created_at])
