@@ -256,21 +256,25 @@ app.patch('/me/mail-preferences', authtoken, async (c: any) => {
     .$extends(withAccelerate());
 
   try {
-    const { problemsToMail, tagIds } = body;
+    const { problemsToMail, tagIds, preferredDifficulty } = body;
 
     if (!Array.isArray(tagIds) || typeof problemsToMail !== 'number') {
       return c.json({ success: false, message: 'Invalid payload' }, 400);
     }
+
+    // preferredDifficulty can be null/undefined (any difficulty) or a string like 'A', 'B', 'C', etc.
+    const difficultyValue = preferredDifficulty || null;
 
     // get or create mail prefs
     
     const mailPref = await prisma.usermailprops.upsert({
       //@ts-ignore
       where: { user_id: userId },
-      update: { problemsToMail },
+      update: { problemsToMail, preferred_difficulty: difficultyValue },
       create: {
         user_id: userId,
         problemsToMail,
+        preferred_difficulty: difficultyValue,
       },
     });
 
@@ -291,6 +295,7 @@ app.patch('/me/mail-preferences', authtoken, async (c: any) => {
       success: true,
       problemsToMail,
       tagIds,
+      preferredDifficulty: difficultyValue,
     });
 
   } catch (error) {
@@ -2532,6 +2537,7 @@ app.get('/me/profile', authtoken, async (c: any) => {
         mailprops: {
           select: {
             problemsToMail: true,
+            preferred_difficulty: true,
             tags_choosen: {
               select: {
                 tagrelation: {
@@ -2563,6 +2569,7 @@ app.get('/me/profile', authtoken, async (c: any) => {
         email: user?.email,
         dailymail: user?.dailymail,
         problemsToMail: user?.mailprops[0]?.problemsToMail ?? 0,
+        preferredDifficulty: user?.mailprops[0]?.preferred_difficulty ?? null,
         tags:
           user?.mailprops[0]?.tags_choosen.map(
             t => t.tagrelation

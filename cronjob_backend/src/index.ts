@@ -5,6 +5,244 @@ import {env} from 'hono/adapter'
 import { cors } from 'hono/cors';
 import z, { any } from 'zod'
 
+// ==================== PLATFORM & DIFFICULTY UTILITIES ====================
+
+type Platform = 'codeforces' | 'leetcode' | 'codechef' | 'atcoder' | 'other';
+
+// Detect platform from problem link
+function getPlatform(link: string): Platform {
+  const lowerLink = link.toLowerCase();
+  if (lowerLink.includes('codeforces.com')) return 'codeforces';
+  if (lowerLink.includes('leetcode.com')) return 'leetcode';
+  if (lowerLink.includes('codechef.com')) return 'codechef';
+  if (lowerLink.includes('atcoder.jp')) return 'atcoder';
+  return 'other';
+}
+
+// Difficulty levels: A (easiest) -> F (hardest)
+const DIFFICULTIES = ['A', 'B', 'C', 'D', 'E', 'F'];
+
+/**
+ * Get acceptable difficulty levels based on user's preferred difficulty and platform.
+ * 
+ * Cross-platform difficulty calibration:
+ * - Codeforces: A=800-1000, B=1100-1400, C=1500-1800, D=1900-2100, E=2200-2400, F=2500+
+ * - LeetCode: Easy≈A-B, Medium≈C-D, Hard≈E-F (but generally easier than CF at same letter)
+ * - CodeChef: Similar to Codeforces
+ * - AtCoder: Similar to Codeforces but slightly harder
+ * 
+ * STRICT Strategy:
+ * - Always include the preferred difficulty
+ * - Include ONE level harder max (reasonable challenge)
+ * - For LeetCode only: can go one more level harder (LeetCode D ≈ Codeforces C)
+ * - NEVER include more than one level easier (avoid too-easy problems)
+ */
+function getAcceptableDifficulties(preferred: string | null, platform: Platform): string[] {
+  // No preference = accept all difficulties
+  if (!preferred) return DIFFICULTIES;
+  
+  const prefIndex = DIFFICULTIES.indexOf(preferred.toUpperCase());
+  if (prefIndex === -1) return DIFFICULTIES;
+  
+  const acceptable = new Set<string>();
+  
+  // Always include preferred
+  acceptable.add(DIFFICULTIES[prefIndex]);
+  
+  // Include ONE level harder (reasonable challenge)
+  if (prefIndex < DIFFICULTIES.length - 1) {
+    acceptable.add(DIFFICULTIES[prefIndex + 1]);
+  }
+  
+  // Platform-specific adjustments - STRICT
+  switch (platform) {
+    case 'leetcode':
+      // LeetCode is easier, so we can accept ONE more level harder
+      // User wants C? LeetCode D and E are acceptable (equivalent to CF C-D)
+      if (prefIndex < DIFFICULTIES.length - 2) {
+        acceptable.add(DIFFICULTIES[prefIndex + 2]);
+      }
+      break;
+      
+    case 'atcoder':
+      // AtCoder is harder, so one level easier is actually appropriate
+      if (prefIndex > 0) {
+        acceptable.add(DIFFICULTIES[prefIndex - 1]);
+      }
+      break;
+      
+    case 'codeforces':
+    case 'codechef':
+    default:
+      // For Codeforces/CodeChef - NO easier problems
+      // User wants C? Give them C and D only, not B
+      // This keeps the challenge appropriate
+      break;
+  }
+  
+  return Array.from(acceptable);
+}
+
+/**
+ * Build a STRICT difficulty filter for Prisma query.
+ * Only includes preferred difficulty + 1 harder + 2 harder for LeetCode flexibility.
+ * Returns undefined if no difficulty preference (fetch all).
+ */
+function buildDifficultyFilter(preferred: string | null): { in: string[] } | undefined {
+  if (!preferred) return undefined;
+  
+  const prefIndex = DIFFICULTIES.indexOf(preferred.toUpperCase());
+  if (prefIndex === -1) return undefined;
+  
+  // STRICT filter: preferred, +1, +2 only (no easier except for AtCoder)
+  const acceptable = new Set<string>();
+  
+  // Preferred level
+  acceptable.add(DIFFICULTIES[prefIndex]);
+  
+  // One harder
+  if (prefIndex < DIFFICULTIES.length - 1) {
+    acceptable.add(DIFFICULTIES[prefIndex + 1]);
+  }
+  
+  // Two harder (for LeetCode flexibility)
+  if (prefIndex < DIFFICULTIES.length - 2) {
+    acceptable.add(DIFFICULTIES[prefIndex + 2]);
+  }
+  
+  // One easier (for AtCoder)
+  if (prefIndex > 0) {
+    acceptable.add(DIFFICULTIES[prefIndex - 1]);
+  }
+  
+  return { in: Array.from(acceptable) };
+}
+
+/**
+ * Check if a problem's difficulty is acceptable for the user's preference.
+ * This is the STRICT filter applied after fetching.
+ */
+function isProblemAcceptable(
+  problemDifficulty: string,
+  problemLink: string,
+  preferredDifficulty: string | null
+): boolean {
+  if (!preferredDifficulty) return true; // No preference, all acceptable
+  
+  const platform = getPlatform(problemLink);
+  const acceptable = getAcceptableDifficulties(preferredDifficulty, platform);
+  
+  return acceptable.includes(problemDifficulty.toUpperCase());
+}
+
+/**
+ * Score a problem based on how well it matches the user's preferred difficulty.
+ * Higher score = better match. Returns 0 if not acceptable.
+ */
+function scoreProblemDifficulty(
+  problemDifficulty: string,
+  problemLink: string,
+  preferredDifficulty: string | null
+): number {
+  if (!preferredDifficulty) return 100; // No preference, all equal
+  
+  const platform = getPlatform(problemLink);
+  const acceptable = getAcceptableDifficulties(preferredDifficulty, platform);
+  
+  if (!acceptable.includes(problemDifficulty.toUpperCase())) {
+    return 0; // Not acceptable - WILL BE FILTERED OUT
+  }
+  
+  const prefIndex = DIFFICULTIES.indexOf(preferredDifficulty.toUpperCase());
+  const probIndex = DIFFICULTIES.indexOf(problemDifficulty.toUpperCase());
+  
+  // Exact match gets highest score
+  if (probIndex === prefIndex) return 100;
+  
+  // One level harder is good (challenge)
+  if (probIndex === prefIndex + 1) return 85;
+  
+  // Two levels harder (for LeetCode) is okay
+  if (probIndex === prefIndex + 2) return 70;
+  
+  // One level easier (for AtCoder) is acceptable
+  if (probIndex === prefIndex - 1) return 60;
+  
+  return 0; // Should not reach here
+}
+
+/**
+ * Select problems ensuring platform variety AND strict difficulty filtering.
+ * Aims to distribute problems across Codeforces, LeetCode, CodeChef.
+ * FILTERS OUT any problems that don't match the difficulty criteria.
+ */
+function selectWithPlatformVariety(
+  problems: any[],
+  count: number,
+  preferredDifficulty: string | null
+): any[] {
+  // FIRST: Filter out problems that don't match difficulty criteria
+  const filteredProblems = problems.filter(p => 
+    isProblemAcceptable(p.difficulty, p.problem_link, preferredDifficulty)
+  );
+  
+  if (filteredProblems.length <= count) return filteredProblems;
+  
+  // Group by platform
+  const byPlatform: Record<Platform, any[]> = {
+    codeforces: [],
+    leetcode: [],
+    codechef: [],
+    atcoder: [],
+    other: []
+  };
+  
+  for (const p of filteredProblems) {
+    const platform = getPlatform(p.problem_link);
+    byPlatform[platform].push(p);
+  }
+  
+  // Sort each platform's problems by difficulty score (best matches first)
+  const platformKeys: Platform[] = ['codeforces', 'leetcode', 'codechef', 'atcoder', 'other'];
+  for (const platform of platformKeys) {
+    byPlatform[platform].sort((a, b) => {
+      const scoreA = scoreProblemDifficulty(a.difficulty, a.problem_link, preferredDifficulty);
+      const scoreB = scoreProblemDifficulty(b.difficulty, b.problem_link, preferredDifficulty);
+      return scoreB - scoreA; // Higher score first
+    });
+  }
+  
+  const selected: any[] = [];
+  const usedIds = new Set<number>();
+  
+  // Round-robin selection from each platform to ensure variety
+  let platformIndex = 0;
+  const activePlatforms = platformKeys.filter(p => byPlatform[p].length > 0);
+  
+  while (selected.length < count && activePlatforms.length > 0) {
+    const platform = activePlatforms[platformIndex % activePlatforms.length];
+    const platformProblems = byPlatform[platform];
+    
+    // Find next unused problem from this platform
+    const problem = platformProblems.find(p => !usedIds.has(p.id));
+    
+    if (problem) {
+      selected.push(problem);
+      usedIds.add(problem.id);
+    } else {
+      // Remove exhausted platform
+      const idx = activePlatforms.indexOf(platform);
+      if (idx > -1) activePlatforms.splice(idx, 1);
+    }
+    
+    platformIndex++;
+  }
+  
+  return selected;
+}
+
+// ==================== TAG GROUPS ====================
+
 // Tag Groups - selecting any tag expands to all tags in the group
 const TAG_GROUPS: Record<string, string[]> = {
   "Dynamic Programming": [
@@ -170,203 +408,6 @@ const app = new Hono();
 app.use(cors());
 
 
-
-
-app.post('/tosendworks', async (c) => {
-  //const { DATABASE_URL } = env<{ DATABASE_URL: string }>(c);
-
-  const DATABASE_URL = "prisma://accelerate.prisma-data.net/?api_key=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqd3RfaWQiOjEsInNlY3VyZV9rZXkiOiJza19JTE5GUnBRZThnSWh4N0o5b2gxQzYiLCJhcGlfa2V5IjoiMDFLRDAyRDRKRFAwMlhRRDVURU5HRDNSTjMiLCJ0ZW5hbnRfaWQiOiI3MGI3MzI2NGQ0NWQxZjBmMzA4YzUwN2EwNDVmYjI4YzAwYjA0ZDZhY2ZkMTljZTZlNTY5ZWMxZTE2MjIyOWQ4IiwiaW50ZXJuYWxfc2VjcmV0IjoiMTcyZWZhY2EtNDY5ZS00ZGZiLTg0NWUtOTNmNmMwZDhjNGUzIn0.lveooq2Gu4IPCCjfN5-kPkiDqT9_RQ74cluFgjuUOIo";
-
-  const prisma = new PrismaClient({
-    datasourceUrl: DATABASE_URL,
-  }).$extends(withAccelerate());
-
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-
-  try {
-    const users = await prisma.user.findMany({
-      where: { dailymail: true },
-      include: {
-        mailprops: { include: { tags_choosen: { include: { tagrelation: true } } } },
-        allmails: { include: { mail: true } },
-      },
-    });
-
-    const mailsToSend: any[] = [];
-
-    for (const user of users) {
-      const userId = user.id;
-      const emails = [user.username, ...user.allmails.map(m => m.mail.mail)];
-
-      const problemsToMail = user.mailprops?.[0]?.problemsToMail ?? 3;
-      const selectedTagIds = user.mailprops?.[0]?.tags_choosen.map(t => t.tag_id) ?? [];
-      const selectedTagNames = user.mailprops?.[0]?.tags_choosen.map(t => t.tagrelation.tag_name) ?? [];
-      const hasSelectedTags = selectedTagIds.length > 0;
-
-      const solvedRecently = await prisma.problemsToUserWithDate.findMany({
-        where: {
-          user_id: userId,
-          solved: true,
-          created_at: { gte: sevenDaysAgo },
-        },
-        select: { problem_id: true },
-      });
-
-      const solvedIds = solvedRecently.map(p => p.problem_id);
-
-      // Expand tags to groups - returns undefined if "Others" tag selected
-      const expandedTagNames = hasSelectedTags ? expandTagsToGroups(selectedTagNames) : undefined;
-      
-      // If no tags selected OR any "Others" tag selected, fetch all problems (no filter)
-      let tagFilter: { some: { tags: { tag_name: { in: string[], mode: 'insensitive' } } } } | undefined = undefined;
-      
-      if (hasSelectedTags && expandedTagNames !== undefined) {
-        // Use expanded tags for filtering (case-insensitive)
-        tagFilter = { some: { tags: { tag_name: { in: expandedTagNames, mode: 'insensitive' } } } };
-      }
-
-      // ---------------- A. USER POSTED ----------------
-      const userPosted = await prisma.problems.findMany({
-        where: {
-          user_id_posted: userId,
-          id: { notIn: solvedIds },
-          ...(tagFilter && { problem_tags: tagFilter }),
-        },
-        take: problemsToMail,
-        include: { problem_tags: { include: { tags: true } } },
-      });
-
-      const usedIds = new Set(userPosted.map(p => p.id));
-
-      // ---------------- B. RANDOM ----------------
-      const randomProblems = await prisma.problems.findMany({
-        where: {
-          id: { notIn: [...usedIds, ...solvedIds] },
-          ...(tagFilter && { problem_tags: tagFilter }),
-        },
-        take: problemsToMail,
-        include: { problem_tags: { include: { tags: true } } },
-      });
-
-      randomProblems.forEach(p => usedIds.add(p.id));
-
-      // ---------------- C. IMPLEMENTATION ----------------
-      const implementationTag = await prisma.tags.findFirst({
-        where: { tag_name: "Implementation" },
-      });
-
-      const implementationProblems = implementationTag
-        ? await prisma.problems.findMany({
-            where: {
-              id: { notIn: [...usedIds, ...solvedIds] },
-              problem_tags: { some: { tag_id: implementationTag.id } },
-            },
-            take: 2,
-            include: { problem_tags: { include: { tags: true } } },
-          })
-        : [];
-
-      // ---------------- D. STARRED PROBLEMS ----------------
-      const starred = await prisma.problemtouser.findMany({
-        where: {
-          user_id: userId,
-          starred: true,
-          problem_id: { notIn: solvedIds },
-        },
-        take: 2,
-        include: {
-          problems: {
-            include: {
-              problem_tags: { include: { tags: true } },
-            },
-          },
-        },
-      });
-
-      // ---------------- SAVE SENT PROBLEMS ----------------
-      const allProblems = [
-        ...userPosted,
-        ...randomProblems,
-        ...implementationProblems,
-      ];
-
-      await prisma.problemsToUserWithDate.createMany({
-        data: allProblems.map(p => ({
-          user_id: userId,
-          problem_id: p.id,
-          solved: false,
-        })),
-      });
-
-      // ---------------- PREP MAIL PAYLOAD ----------------
-      mailsToSend.push({
-        user: user.name,
-        emails,
-        userPosted: userPosted.map(p => ({
-          title: p.title,
-          link: p.problem_link,
-          tags: p.problem_tags.map(t => t.tags.tag_name),
-        })),
-        randomProblems: randomProblems.map(p => ({
-          title: p.title,
-          link: p.problem_link,
-          tags: p.problem_tags.map(t => t.tags.tag_name),
-        })),
-        implementationProblems: implementationProblems.map(p => ({
-          title: p.title,
-          link: p.problem_link,
-          tags: p.problem_tags.map(t => t.tags.tag_name),
-        })),
-        starredProblems: starred.map(s => ({
-          title: s.problems.title,
-          link: s.problems.problem_link,
-          tags: s.problems.problem_tags.map(t => t.tags.tag_name),
-        })),
-      });
-    }
-
-    
-    // SEND MAIL
-    const re = await fetch("https://mailer-daily-code-9fs57cxyb-sahil-kumar-sinhas-projects.vercel.app/sendquestionsmail", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ success: true, data: mailsToSend }),
-    });
-
-    console.log("✅ Daily mails sent successfully");
-    return c.json({
-      success:true,
-      data: mailsToSend,
-      re
-    })
-
-  } catch (err) {
-    console.error("❌ Cron failed:", err);
-    return c.json({
-      success:false,
-      error: err
-    })
-  } finally {
-    await prisma.$disconnect();
-  }
-});
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 export default {
   fetch: app.fetch,
   async scheduled(event:any, env:any, ctx:any) {
@@ -374,179 +415,6 @@ export default {
     await handleScheduled();
   },
 }
-
-
-// async function handleScheduled() {
-//   const DATABASE_URL = "prisma://accelerate.prisma-data.net/?api_key=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqd3RfaWQiOjEsInNlY3VyZV9rZXkiOiJza19JTE5GUnBRZThnSWh4N0o5b2gxQzYiLCJhcGlfa2V5IjoiMDFLRDAyRDRKRFAwMlhRRDVURU5HRDNSTjMiLCJ0ZW5hbnRfaWQiOiI3MGI3MzI2NGQ0NWQxZjBmMzA4YzUwN2EwNDVmYjI4YzAwYjA0ZDZhY2ZkMTljZTZlNTY5ZWMxZTE2MjIyOWQ4IiwiaW50ZXJuYWxfc2VjcmV0IjoiMTcyZWZhY2EtNDY5ZS00ZGZiLTg0NWUtOTNmNmMwZDhjNGUzIn0.lveooq2Gu4IPCCjfN5-kPkiDqT9_RQ74cluFgjuUOIo";
-
-//   const prisma = new PrismaClient({
-//     datasourceUrl: DATABASE_URL,
-//   }).$extends(withAccelerate());
-
-//   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-
-//   try {
-//     // 1️⃣ Fetch all users who want daily mail
-//     const users = await prisma.user.findMany({
-//       where: { dailymail: true },
-//       include: {
-//         mailprops: {
-//           include: {
-//             tags_choosen: {
-//               include: { tagrelation: true },
-//             },
-//           },
-//         },
-//         allmails: {
-//           include: { mail: true },
-//         },
-//       },
-//     });
-
-//     const mailsToSend: any[] = [];
-
-//     for (const user of users) {
-//       const userId = user.id;
-//       const userName = user.name;
-
-//       const emails = [
-//         user.username, // login email
-//         //@ts-ignore
-//         ...user.allmails.map(m => m.mail.mail),
-//       ];
-
-//       const problemsToMail = user.mailprops?.[0]?.problemsToMail ?? 3;
-//       const selectedTagIds =
-//         user.mailprops?.[0]?.tags_choosen.map((t:any) => t.tag_id) ?? [];
-
-//       // 2️⃣ Find recently solved problems
-//       const solvedRecently = await prisma.problemsToUserWithDate.findMany({
-//         where: {
-//           user_id: userId,
-//           solved: true,
-//           created_at: { gte: sevenDaysAgo },
-//         },
-//         select: { problem_id: true },
-//       });
-
-//       const solvedIds = solvedRecently.map((p:any) => p.problem_id);
-
-//       // -----------------------------------
-//       // A️⃣ User-posted problems
-//       // -----------------------------------
-//       const userPosted = await prisma.problems.findMany({
-//         where: {
-//           user_id_posted: userId,
-//           id: { notIn: solvedIds },
-//           problem_tags: {
-//             some: { tag_id: { in: selectedTagIds } },
-//           },
-//         },
-//         take: problemsToMail,
-//         include: {
-//           problem_tags: { include: { tags: true } },
-//         },
-//       });
-
-//       const usedIds = new Set(userPosted.map((p:any) => p.id));
-
-//       // -----------------------------------
-//       // B️⃣ Random problems (same tags)
-//       // -----------------------------------
-//       const randomProblems = await prisma.problems.findMany({
-//         where: {
-//           user_id_posted: { not: userId },
-//           id: { notIn: [...solvedIds, ...usedIds] },
-//           problem_tags: {
-//             some: { tag_id: { in: selectedTagIds } },
-//           },
-//         },
-//         take: problemsToMail,
-//         orderBy: { id: "desc" },
-//         include: {
-//           problem_tags: { include: { tags: true } },
-//         },
-//       });
-
-//       randomProblems.forEach(p => usedIds.add(p.id));
-
-//       // -----------------------------------
-//       // C️⃣ Implementation problems
-//       // -----------------------------------
-//       const implementationTag = await prisma.tags.findFirst({
-//         where: { tag_name: "Implementation" },
-//       });
-
-//       const implementationProblems = implementationTag
-//         ? await prisma.problems.findMany({
-//             where: {
-//               id: { notIn: [...solvedIds, ...usedIds] },
-//               problem_tags: {
-//                 some: { tag_id: implementationTag.id },
-//               },
-//             },
-//             take: 2,
-//             include: {
-//               problem_tags: { include: { tags: true } },
-//             },
-//           })
-//         : [];
-
-//       implementationProblems.forEach(p => usedIds.add(p.id));
-
-//       // -----------------------------------
-//       // D️⃣ Starred problems
-//       // -----------------------------------
-//       const starred = await prisma.problemtouser.findMany({
-//         where: {
-//           user_id: userId,
-//           starred: true,
-//           problem_id: { notIn: solvedIds },
-//         },
-//         take: 2,
-//         include: {
-//           problems: {
-//             include: {
-//               problem_tags: { include: { tags: true } },
-//             },
-//           },
-//         },
-//       });
-
-//       // -----------------------------------
-//       // Build mail payload
-//       // -----------------------------------
-//       mailsToSend.push({
-//         user: userName,
-//         emails,
-//         userPosted: formatProblems(userPosted),
-//         randomProblems: formatProblems(randomProblems),
-//         implementationProblems: formatProblems(implementationProblems),
-//         starredProblems: starred.map(s => ({
-//           title: s.problems.title,
-//           link: s.problems.problem_link,
-//           tags: s.problems.problem_tags.map(t => t.tags.tag_name),
-//         })),
-//       });
-//     }
-
-//     // 3️⃣ Send to mailer
-//     await fetch("https://mailexpress.vercel.app/sendquestionsmail", {
-//       method: "POST",
-//       headers: { "Content-Type": "application/json" },
-//       body: JSON.stringify({ success: true, data: mailsToSend }),
-//     });
-
-//     console.log("📨 Daily mails sent:", mailsToSend.length);
-//   } catch (e) {
-//     console.error("❌ Cron failed:", e);
-//   } finally {
-//     await prisma.$disconnect();
-//   }
-// }
-
-// Helper
-
 
 async function handleScheduled() {
   const DATABASE_URL = "prisma://accelerate.prisma-data.net/?api_key=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqd3RfaWQiOjEsInNlY3VyZV9rZXkiOiJza19JTE5GUnBRZThnSWh4N0o5b2gxQzYiLCJhcGlfa2V5IjoiMDFLRDAyRDRKRFAwMlhRRDVURU5HRDNSTjMiLCJ0ZW5hbnRfaWQiOiI3MGI3MzI2NGQ0NWQxZjBmMzA4YzUwN2EwNDVmYjI4YzAwYjA0ZDZhY2ZkMTljZTZlNTY5ZWMxZTE2MjIyOWQ4IiwiaW50ZXJuYWxfc2VjcmV0IjoiMTcyZWZhY2EtNDY5ZS00ZGZiLTg0NWUtOTNmNmMwZDhjNGUzIn0.lveooq2Gu4IPCCjfN5-kPkiDqT9_RQ74cluFgjuUOIo";
@@ -572,11 +440,14 @@ async function handleScheduled() {
       const userId = user.id;
       const emails = [user.username, ...user.allmails.map(m => m.mail.mail)];
 
+      // Get user preferences
       const problemsToMail = user.mailprops?.[0]?.problemsToMail ?? 3;
-      const selectedTagIds = user.mailprops?.[0]?.tags_choosen.map(t => t.tag_id) ?? [];
       const selectedTagNames = user.mailprops?.[0]?.tags_choosen.map(t => t.tagrelation.tag_name) ?? [];
-      const hasSelectedTags = selectedTagIds.length > 0;
+      const hasSelectedTags = selectedTagNames.length > 0;
+      // @ts-ignore - preferred_difficulty is the new field we added
+      const preferredDifficulty: string | null = user.mailprops?.[0]?.preferred_difficulty ?? null;
 
+      // Get recently solved problems to exclude
       const solvedRecently = await prisma.problemsToUserWithDate.findMany({
         where: {
           user_id: userId,
@@ -585,67 +456,71 @@ async function handleScheduled() {
         },
         select: { problem_id: true },
       });
-
       const solvedIds = solvedRecently.map(p => p.problem_id);
 
-      // Expand tags to groups - returns undefined if "Others" tag selected
+      // Also exclude problems already sent in last 7 days (even if not solved)
+      const sentRecently = await prisma.problemsToUserWithDate.findMany({
+        where: {
+          user_id: userId,
+          created_at: { gte: sevenDaysAgo },
+        },
+        select: { problem_id: true },
+      });
+      const sentIds = sentRecently.map(p => p.problem_id);
+      const excludeIds = [...new Set([...solvedIds, ...sentIds])];
+
+      // Build tag filter
       const expandedTagNames = hasSelectedTags ? expandTagsToGroups(selectedTagNames) : undefined;
-      
-      // If no tags selected OR any "Others" tag selected, fetch all problems (no filter)
       let tagFilter: { some: { tags: { tag_name: { in: string[], mode: 'insensitive' } } } } | undefined = undefined;
       
       if (hasSelectedTags && expandedTagNames !== undefined) {
-        // Use expanded tags for filtering (case-insensitive)
         tagFilter = { some: { tags: { tag_name: { in: expandedTagNames, mode: 'insensitive' } } } };
       }
 
-      // ---------------- A. USER POSTED ----------------
-      const userPosted = await prisma.problems.findMany({
+      // Build difficulty filter
+      const difficultyFilter = buildDifficultyFilter(preferredDifficulty);
+
+      // ==================== FETCH CANDIDATE PROBLEMS ====================
+      // Fetch more problems than needed, then use smart selection for variety
+      const fetchMultiplier = 5; // Fetch 5x more to have options for variety
+
+      // ---------------- A. USER POSTED PROBLEMS ----------------
+      const userPostedCandidates = await prisma.problems.findMany({
         where: {
           user_id_posted: userId,
-          id: { notIn: solvedIds },
+          id: { notIn: excludeIds },
           ...(tagFilter && { problem_tags: tagFilter }),
+          ...(difficultyFilter && { difficulty: difficultyFilter }),
         },
-        take: problemsToMail,
+        take: problemsToMail * fetchMultiplier,
         include: { problem_tags: { include: { tags: true } } },
       });
 
+      // Select with platform variety and difficulty scoring
+      const userPosted = selectWithPlatformVariety(userPostedCandidates, problemsToMail, preferredDifficulty);
       const usedIds = new Set(userPosted.map(p => p.id));
 
-      // ---------------- B. RANDOM ----------------
-      const randomProblems = await prisma.problems.findMany({
+      // ---------------- B. RANDOM PROBLEMS (with variety) ----------------
+      const randomCandidates = await prisma.problems.findMany({
         where: {
-          id: { notIn: [...usedIds, ...solvedIds] },
+          id: { notIn: [...usedIds, ...excludeIds] },
           ...(tagFilter && { problem_tags: tagFilter }),
+          ...(difficultyFilter && { difficulty: difficultyFilter }),
         },
-        take: problemsToMail,
+        take: problemsToMail * fetchMultiplier,
         include: { problem_tags: { include: { tags: true } } },
       });
 
+      const randomProblems = selectWithPlatformVariety(randomCandidates, problemsToMail, preferredDifficulty);
       randomProblems.forEach(p => usedIds.add(p.id));
 
-      // ---------------- C. IMPLEMENTATION ----------------
-      const implementationTag = await prisma.tags.findFirst({
-        where: { tag_name: "Implementation" },
-      });
-
-      const implementationProblems = implementationTag
-        ? await prisma.problems.findMany({
-            where: {
-              id: { notIn: [...usedIds, ...solvedIds] },
-              problem_tags: { some: { tag_id: implementationTag.id } },
-            },
-            take: 2,
-            include: { problem_tags: { include: { tags: true } } },
-          })
-        : [];
-
-      // ---------------- D. STARRED PROBLEMS ----------------
+      // ---------------- C. STARRED PROBLEMS ----------------
+      // User's starred problems - these should be revisited
       const starred = await prisma.problemtouser.findMany({
         where: {
           user_id: userId,
           starred: true,
-          problem_id: { notIn: solvedIds },
+          problem_id: { notIn: [...usedIds, ...excludeIds] },
         },
         take: 2,
         include: {
@@ -657,56 +532,53 @@ async function handleScheduled() {
         },
       });
 
-      // ---------------- SAVE SENT PROBLEMS ----------------
+      // ==================== SAVE SENT PROBLEMS ====================
       const allProblems = [
         ...userPosted,
         ...randomProblems,
-        ...implementationProblems,
       ];
 
-      await prisma.problemsToUserWithDate.createMany({
-        data: allProblems.map(p => ({
-          user_id: userId,
-          problem_id: p.id,
-          solved: false,
-        })),
+      if (allProblems.length > 0) {
+        await prisma.problemsToUserWithDate.createMany({
+          data: allProblems.map(p => ({
+            user_id: userId,
+            problem_id: p.id,
+            solved: false,
+          })),
+        });
+      }
+
+      // ==================== PREP MAIL PAYLOAD ====================
+      const formatProblem = (p: any) => ({
+        title: p.title,
+        link: p.problem_link,
+        difficulty: p.difficulty,
+        platform: getPlatform(p.problem_link),
+        tags: p.problem_tags.map((t: any) => t.tags.tag_name),
       });
 
-      // ---------------- PREP MAIL PAYLOAD ----------------
       mailsToSend.push({
         user: user.name,
         emails,
-        userPosted: userPosted.map(p => ({
-          title: p.title,
-          link: p.problem_link,
-          tags: p.problem_tags.map(t => t.tags.tag_name),
-        })),
-        randomProblems: randomProblems.map(p => ({
-          title: p.title,
-          link: p.problem_link,
-          tags: p.problem_tags.map(t => t.tags.tag_name),
-        })),
-        implementationProblems: implementationProblems.map(p => ({
-          title: p.title,
-          link: p.problem_link,
-          tags: p.problem_tags.map(t => t.tags.tag_name),
-        })),
-        starredProblems: starred.map(s => ({
-          title: s.problems.title,
-          link: s.problems.problem_link,
-          tags: s.problems.problem_tags.map(t => t.tags.tag_name),
-        })),
+        preferredDifficulty,
+        userPosted: userPosted.map(formatProblem),
+        randomProblems: randomProblems.map(formatProblem),
+        starredProblems: starred.map(s => formatProblem(s.problems)),
+      });
+
+      console.log(`📧 Prepared mail for ${user.name}: ${allProblems.length} problems (difficulty: ${preferredDifficulty || 'any'})`);
+    }
+
+    // ==================== SEND MAIL ====================
+    if (mailsToSend.length > 0) {
+      await fetch("https://mailer-daily-code-9fs57cxyb-sahil-kumar-sinhas-projects.vercel.app/sendquestionsmail", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ success: true, data: mailsToSend }),
       });
     }
 
-    // SEND MAIL
-    await fetch("https://mailer-daily-code-9fs57cxyb-sahil-kumar-sinhas-projects.vercel.app/sendquestionsmail", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ success: true, data: mailsToSend }),
-    });
-
-    console.log("✅ Daily mails sent successfully");
+    console.log(`✅ Daily mails sent successfully to ${mailsToSend.length} users`);
 
   } catch (err) {
     console.error("❌ Cron failed:", err);

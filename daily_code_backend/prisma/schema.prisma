@@ -88,9 +88,10 @@ model Problems {
 }
 
 model usermailprops {
-  id             Int @id @default(autoincrement())
-  user_id        Int @unique
-  problemsToMail Int @default(3)
+  id                   Int     @id @default(autoincrement())
+  user_id              Int     @unique
+  problemsToMail       Int     @default(3)
+  preferred_difficulty String?
 
   user         User @relation(fields: [user_id], references: [id], onDelete: Cascade)
   tags_choosen mailproblemTags[]
