@@ -61,8 +61,8 @@ model Tagstoproblems {
   tag_id     Int
   problem_id Int
 
-  tags     Tags     @relation(fields: [tag_id], references: [id])
-  problems Problems @relation(fields: [problem_id], references: [id])
+  tags     Tags     @relation(fields: [tag_id], references: [id], onDelete: Cascade)
+  problems Problems @relation(fields: [problem_id], references: [id], onDelete: Cascade)
 
   @@unique([tag_id, problem_id])
   @@index([tag_id])
@@ -88,9 +88,10 @@ model Problems {
 }
 
 model usermailprops {
-  id             Int @id @default(autoincrement())
-  user_id        Int @unique
-  problemsToMail Int @default(3)
+  id                   Int     @id @default(autoincrement())
+  user_id              Int     @unique
+  problemsToMail       Int     @default(3)
+  preferred_difficulty String?
 
   user         User @relation(fields: [user_id], references: [id], onDelete: Cascade)
   tags_choosen mailproblemTags[]
