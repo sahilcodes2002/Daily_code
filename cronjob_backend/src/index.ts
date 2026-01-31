@@ -172,73 +172,297 @@ function scoreProblemDifficulty(
 }
 
 /**
- * Select problems ensuring platform variety AND strict difficulty filtering.
- * Aims to distribute problems across Codeforces, LeetCode, CodeChef.
- * FILTERS OUT any problems that don't match the difficulty criteria.
+ * Select problems at EXACT difficulty only.
+ * If not enough found, returns what's available at exact difficulty.
  */
-function selectWithPlatformVariety(
+function selectAtExactDifficulty(
   problems: any[],
   count: number,
   preferredDifficulty: string | null
 ): any[] {
-  // FIRST: Filter out problems that don't match difficulty criteria
-  const filteredProblems = problems.filter(p => 
-    isProblemAcceptable(p.difficulty, p.problem_link, preferredDifficulty)
+  if (!preferredDifficulty) {
+    // No preference - shuffle and return
+    const shuffled = [...problems].sort(() => Math.random() - 0.5);
+    return shuffled.slice(0, count);
+  }
+
+  // Filter to EXACT difficulty only
+  const exactMatch = problems.filter(p => 
+    p.difficulty?.toUpperCase() === preferredDifficulty.toUpperCase()
   );
-  
-  if (filteredProblems.length <= count) return filteredProblems;
-  
-  // Group by platform
+
+  // Group by platform for variety
   const byPlatform: Record<Platform, any[]> = {
-    codeforces: [],
-    leetcode: [],
-    codechef: [],
-    atcoder: [],
-    other: []
+    codeforces: [], leetcode: [], codechef: [], atcoder: [], other: []
   };
   
-  for (const p of filteredProblems) {
+  for (const p of exactMatch) {
     const platform = getPlatform(p.problem_link);
     byPlatform[platform].push(p);
   }
-  
-  // Sort each platform's problems by difficulty score (best matches first)
+
+  // Shuffle each platform's problems
   const platformKeys: Platform[] = ['codeforces', 'leetcode', 'codechef', 'atcoder', 'other'];
   for (const platform of platformKeys) {
-    byPlatform[platform].sort((a, b) => {
-      const scoreA = scoreProblemDifficulty(a.difficulty, a.problem_link, preferredDifficulty);
-      const scoreB = scoreProblemDifficulty(b.difficulty, b.problem_link, preferredDifficulty);
-      return scoreB - scoreA; // Higher score first
-    });
+    byPlatform[platform].sort(() => Math.random() - 0.5);
   }
-  
+
   const selected: any[] = [];
   const usedIds = new Set<number>();
-  
-  // Round-robin selection from each platform to ensure variety
   let platformIndex = 0;
   const activePlatforms = platformKeys.filter(p => byPlatform[p].length > 0);
-  
+
+  // Round-robin selection from each platform
   while (selected.length < count && activePlatforms.length > 0) {
     const platform = activePlatforms[platformIndex % activePlatforms.length];
     const platformProblems = byPlatform[platform];
-    
-    // Find next unused problem from this platform
     const problem = platformProblems.find(p => !usedIds.has(p.id));
     
     if (problem) {
       selected.push(problem);
       usedIds.add(problem.id);
     } else {
-      // Remove exhausted platform
       const idx = activePlatforms.indexOf(platform);
       if (idx > -1) activePlatforms.splice(idx, 1);
     }
-    
     platformIndex++;
   }
-  
+
   return selected;
+}
+
+/**
+ * Find replacement problems when exact difficulty not available.
+ * For each missing problem, try to find one easier AND one harder.
+ * Returns: { replacements: problems[], shortfall: number }
+ */
+function findReplacementProblems(
+  problems: any[],
+  needed: number,
+  preferredDifficulty: string,
+  excludeIds: Set<number>
+): any[] {
+  const prefIndex = DIFFICULTIES.indexOf(preferredDifficulty.toUpperCase());
+  if (prefIndex === -1) return [];
+
+  const replacements: any[] = [];
+  const usedIds = new Set(excludeIds);
+
+  // Get one level easier and one level harder
+  const easierDiff = prefIndex > 0 ? DIFFICULTIES[prefIndex - 1] : null;
+  const harderDiff = prefIndex < DIFFICULTIES.length - 1 ? DIFFICULTIES[prefIndex + 1] : null;
+
+  // Filter problems by difficulty
+  const easierProblems = easierDiff 
+    ? problems.filter(p => p.difficulty?.toUpperCase() === easierDiff && !usedIds.has(p.id))
+    : [];
+  const harderProblems = harderDiff
+    ? problems.filter(p => p.difficulty?.toUpperCase() === harderDiff && !usedIds.has(p.id))
+    : [];
+
+  // Shuffle for randomness
+  easierProblems.sort(() => Math.random() - 0.5);
+  harderProblems.sort(() => Math.random() - 0.5);
+
+  // For each missing problem, try to add one easier AND one harder
+  for (let i = 0; i < needed; i++) {
+    let addedAny = false;
+    
+    // Try to add one easier
+    const easier = easierProblems.find(p => !usedIds.has(p.id));
+    if (easier) {
+      replacements.push(easier);
+      usedIds.add(easier.id);
+      addedAny = true;
+    }
+
+    // Try to add one harder
+    const harder = harderProblems.find(p => !usedIds.has(p.id));
+    if (harder) {
+      replacements.push(harder);
+      usedIds.add(harder.id);
+      addedAny = true;
+    }
+
+    // If couldn't find both, try to find at least one more of either
+    if (!easier && !addedAny) {
+      const anyHarder = harderProblems.find(p => !usedIds.has(p.id));
+      if (anyHarder) {
+        replacements.push(anyHarder);
+        usedIds.add(anyHarder.id);
+      }
+    }
+    if (!harder && !addedAny) {
+      const anyEasier = easierProblems.find(p => !usedIds.has(p.id));
+      if (anyEasier) {
+        replacements.push(anyEasier);
+        usedIds.add(anyEasier.id);
+      }
+    }
+  }
+
+  return replacements;
+}
+
+/**
+ * Select problems for RANDOM PICKS - strict difficulty matching with fallback.
+ * 1. Try to get exact difficulty problems
+ * 2. For each missing, replace with one easier + one harder
+ */
+function selectRandomProblems(
+  problems: any[],
+  count: number,
+  preferredDifficulty: string | null
+): any[] {
+  console.log(`[selectRandomProblems] Starting with ${problems.length} candidates, need ${count}, preferred: ${preferredDifficulty}`);
+  
+  // Get exact difficulty problems first
+  const exactProblems = selectAtExactDifficulty(problems, count, preferredDifficulty);
+  console.log(`[selectRandomProblems] Found ${exactProblems.length} exact matches: ${exactProblems.map(p => p.difficulty).join(', ')}`);
+  
+  if (!preferredDifficulty || exactProblems.length >= count) {
+    return exactProblems;
+  }
+
+  // Need replacements
+  const shortfall = count - exactProblems.length;
+  console.log(`[selectRandomProblems] Need ${shortfall} replacements`);
+  const usedIds = new Set(exactProblems.map(p => p.id));
+  
+  const replacements = findReplacementProblems(
+    problems, 
+    shortfall, 
+    preferredDifficulty, 
+    usedIds
+  );
+  console.log(`[selectRandomProblems] Got ${replacements.length} replacements: ${replacements.map(p => p.difficulty).join(', ')}`);
+
+  const result = [...exactProblems, ...replacements];
+  console.log(`[selectRandomProblems] Final selection: ${result.map(p => p.difficulty).join(', ')}`);
+  return result;
+}
+
+/**
+ * Select problems for EXTRA HUSTLE - slightly harder problems.
+ * Distribution: 70% one level harder, 30% two levels harder
+ */
+function selectExtraHustleProblems(
+  problems: any[],
+  count: number,
+  preferredDifficulty: string | null,
+  excludeIds: Set<number>
+): any[] {
+  console.log(`[selectExtraHustleProblems] Starting with ${problems.length} candidates, need ${count}, preferred: ${preferredDifficulty}`);
+  
+  if (!preferredDifficulty) {
+    // No preference - just return random problems not in excludeIds
+    const available = problems.filter(p => !excludeIds.has(p.id));
+    available.sort(() => Math.random() - 0.5);
+    return available.slice(0, count);
+  }
+
+  const prefIndex = DIFFICULTIES.indexOf(preferredDifficulty.toUpperCase());
+  if (prefIndex === -1) return [];
+
+  // Calculate how many at each level (70% one harder, 30% two harder)
+  const oneHarderCount = Math.ceil(count * 0.7);
+  const twoHarderCount = count - oneHarderCount;
+
+  const oneHarderDiff = prefIndex < DIFFICULTIES.length - 1 ? DIFFICULTIES[prefIndex + 1] : null;
+  const twoHarderDiff = prefIndex < DIFFICULTIES.length - 2 ? DIFFICULTIES[prefIndex + 2] : null;
+  
+  console.log(`[selectExtraHustleProblems] For ${preferredDifficulty}: oneHarder=${oneHarderDiff}(need ${oneHarderCount}), twoHarder=${twoHarderDiff}(need ${twoHarderCount})`);
+
+  const selected: any[] = [];
+  const usedIds = new Set(excludeIds);
+
+  // Get one level harder problems
+  if (oneHarderDiff) {
+    const oneHarderProblems = problems.filter(p => 
+      p.difficulty?.toUpperCase() === oneHarderDiff && !usedIds.has(p.id)
+    );
+    console.log(`[selectExtraHustleProblems] Found ${oneHarderProblems.length} problems at ${oneHarderDiff}`);
+    oneHarderProblems.sort(() => Math.random() - 0.5);
+    
+    for (let i = 0; i < oneHarderCount && i < oneHarderProblems.length; i++) {
+      selected.push(oneHarderProblems[i]);
+      usedIds.add(oneHarderProblems[i].id);
+    }
+  }
+
+  // Get two levels harder problems
+  if (twoHarderDiff) {
+    const twoHarderProblems = problems.filter(p => 
+      p.difficulty?.toUpperCase() === twoHarderDiff && !usedIds.has(p.id)
+    );
+    console.log(`[selectExtraHustleProblems] Found ${twoHarderProblems.length} problems at ${twoHarderDiff}`);
+    twoHarderProblems.sort(() => Math.random() - 0.5);
+    
+    for (let i = 0; i < twoHarderCount && i < twoHarderProblems.length; i++) {
+      selected.push(twoHarderProblems[i]);
+      usedIds.add(twoHarderProblems[i].id);
+    }
+  }
+
+  // If we couldn't fill the count, try to get more from one level harder
+  if (selected.length < count && oneHarderDiff) {
+    const moreOneHarder = problems.filter(p => 
+      p.difficulty?.toUpperCase() === oneHarderDiff && !usedIds.has(p.id)
+    );
+    moreOneHarder.sort(() => Math.random() - 0.5);
+    
+    for (const p of moreOneHarder) {
+      if (selected.length >= count) break;
+      selected.push(p);
+      usedIds.add(p.id);
+    }
+  }
+
+  // Still not enough? Try two levels harder
+  if (selected.length < count && twoHarderDiff) {
+    const moreTwoHarder = problems.filter(p => 
+      p.difficulty?.toUpperCase() === twoHarderDiff && !usedIds.has(p.id)
+    );
+    moreTwoHarder.sort(() => Math.random() - 0.5);
+    
+    for (const p of moreTwoHarder) {
+      if (selected.length >= count) break;
+      selected.push(p);
+      usedIds.add(p.id);
+    }
+  }
+
+  console.log(`[selectExtraHustleProblems] Final selection (${selected.length}): ${selected.map(p => p.difficulty).join(', ')}`);
+  return selected;
+}
+
+/**
+ * Filter problems by exact difficulty preference.
+ * Used for user posted and starred problems (low priority).
+ */
+function filterByDifficulty(
+  problems: any[],
+  preferredDifficulty: string | null,
+  count: number
+): any[] {
+  if (!preferredDifficulty) {
+    return problems.slice(0, count);
+  }
+
+  const matching = problems.filter(p => 
+    p.difficulty?.toUpperCase() === preferredDifficulty.toUpperCase()
+  );
+  
+  return matching.slice(0, count);
+}
+
+// Keep for backward compatibility but mark as deprecated
+function selectWithPlatformVariety(
+  problems: any[],
+  count: number,
+  preferredDifficulty: string | null
+): any[] {
+  return selectRandomProblems(problems, count, preferredDifficulty);
 }
 
 // ==================== TAG GROUPS ====================
@@ -444,8 +668,10 @@ async function handleScheduled() {
       const problemsToMail = user.mailprops?.[0]?.problemsToMail ?? 3;
       const selectedTagNames = user.mailprops?.[0]?.tags_choosen.map(t => t.tagrelation.tag_name) ?? [];
       const hasSelectedTags = selectedTagNames.length > 0;
-      // @ts-ignore - preferred_difficulty is the new field we added
       const preferredDifficulty: string | null = user.mailprops?.[0]?.preferred_difficulty ?? null;
+      
+      console.log(`[User: ${user.name}] problemsToMail: ${problemsToMail}, preferredDifficulty: ${preferredDifficulty}, hasSelectedTags: ${hasSelectedTags}`);
+      console.log(`[User: ${user.name}] mailprops raw:`, JSON.stringify(user.mailprops?.[0]));
 
       // Get recently solved problems to exclude
       const solvedRecently = await prisma.problemsToUserWithDate.findMany({
@@ -477,52 +703,70 @@ async function handleScheduled() {
         tagFilter = { some: { tags: { tag_name: { in: expandedTagNames, mode: 'insensitive' } } } };
       }
 
-      // Build difficulty filter
-      const difficultyFilter = buildDifficultyFilter(preferredDifficulty);
+      // NOTE: We fetch ALL difficulties and filter in code for more control
+      // This allows us to find exact matches first, then replacements
 
       // ==================== FETCH CANDIDATE PROBLEMS ====================
-      // Fetch more problems than needed, then use smart selection for variety
-      const fetchMultiplier = 5; // Fetch 5x more to have options for variety
+      // Fetch more problems than needed for smart selection
+      const fetchMultiplier = 10; // Fetch 10x more to have options for variety and fallbacks
 
-      // ---------------- A. USER POSTED PROBLEMS ----------------
+      // ---------------- A. USER POSTED PROBLEMS (filtered by difficulty - low priority) ----------------
       const userPostedCandidates = await prisma.problems.findMany({
         where: {
           user_id_posted: userId,
           id: { notIn: excludeIds },
           ...(tagFilter && { problem_tags: tagFilter }),
-          ...(difficultyFilter && { difficulty: difficultyFilter }),
         },
         take: problemsToMail * fetchMultiplier,
         include: { problem_tags: { include: { tags: true } } },
       });
 
-      // Select with platform variety and difficulty scoring
-      const userPosted = selectWithPlatformVariety(userPostedCandidates, problemsToMail, preferredDifficulty);
+      // Filter user posted by exact difficulty preference (low priority)
+      const userPosted = filterByDifficulty(userPostedCandidates, preferredDifficulty, problemsToMail);
       const usedIds = new Set(userPosted.map(p => p.id));
 
-      // ---------------- B. RANDOM PROBLEMS (with variety) ----------------
+      // ---------------- B. RANDOM PROBLEMS (STRICT difficulty matching) ----------------
+      // Fetch candidates with broader difficulty to allow for replacements
       const randomCandidates = await prisma.problems.findMany({
         where: {
           id: { notIn: [...usedIds, ...excludeIds] },
           ...(tagFilter && { problem_tags: tagFilter }),
-          ...(difficultyFilter && { difficulty: difficultyFilter }),
         },
         take: problemsToMail * fetchMultiplier,
         include: { problem_tags: { include: { tags: true } } },
       });
 
-      const randomProblems = selectWithPlatformVariety(randomCandidates, problemsToMail, preferredDifficulty);
+      // Select with strict difficulty: exact match first, then easier+harder replacements
+      const randomProblems = selectRandomProblems(randomCandidates, problemsToMail, preferredDifficulty);
       randomProblems.forEach(p => usedIds.add(p.id));
 
-      // ---------------- C. STARRED PROBLEMS ----------------
-      // User's starred problems - these should be revisited
+      // ---------------- C. EXTRA HUSTLE PROBLEMS (slightly harder) ----------------
+      // Same count as random, 70% one level harder, 30% two levels harder
+      const extraHustleCandidates = await prisma.problems.findMany({
+        where: {
+          id: { notIn: [...usedIds, ...excludeIds] },
+          ...(tagFilter && { problem_tags: tagFilter }),
+        },
+        take: problemsToMail * fetchMultiplier,
+        include: { problem_tags: { include: { tags: true } } },
+      });
+
+      const extraHustleProblems = selectExtraHustleProblems(
+        extraHustleCandidates, 
+        problemsToMail, 
+        preferredDifficulty, 
+        usedIds
+      );
+      extraHustleProblems.forEach(p => usedIds.add(p.id));
+
+      // ---------------- D. STARRED PROBLEMS (filtered by difficulty - low priority) ----------------
       const starred = await prisma.problemtouser.findMany({
         where: {
           user_id: userId,
           starred: true,
           problem_id: { notIn: [...usedIds, ...excludeIds] },
         },
-        take: 2,
+        take: 5, // Fetch more to allow filtering
         include: {
           problems: {
             include: {
@@ -532,10 +776,17 @@ async function handleScheduled() {
         },
       });
 
+      // Filter starred problems by difficulty preference
+      const starredFiltered = starred.filter(s => {
+        if (!preferredDifficulty) return true;
+        return s.problems.difficulty?.toUpperCase() === preferredDifficulty.toUpperCase();
+      }).slice(0, 2);
+
       // ==================== SAVE SENT PROBLEMS ====================
       const allProblems = [
         ...userPosted,
         ...randomProblems,
+        ...extraHustleProblems,
       ];
 
       if (allProblems.length > 0) {
@@ -563,15 +814,16 @@ async function handleScheduled() {
         preferredDifficulty,
         userPosted: userPosted.map(formatProblem),
         randomProblems: randomProblems.map(formatProblem),
-        starredProblems: starred.map(s => formatProblem(s.problems)),
+        implementationProblems: extraHustleProblems.map(formatProblem), // Extra Hustle
+        starredProblems: starredFiltered.map(s => formatProblem(s.problems)),
       });
 
-      console.log(`📧 Prepared mail for ${user.name}: ${allProblems.length} problems (difficulty: ${preferredDifficulty || 'any'})`);
+      console.log(`📧 Prepared mail for ${user.name}: ${allProblems.length} problems (random: ${randomProblems.length}, extraHustle: ${extraHustleProblems.length}, difficulty: ${preferredDifficulty || 'any'})`);
     }
 
     // ==================== SEND MAIL ====================
     if (mailsToSend.length > 0) {
-      await fetch("https://mailer-daily-code-9fs57cxyb-sahil-kumar-sinhas-projects.vercel.app/sendquestionsmail", {
+      await fetch("https://mailer-daily-code-j7295qzpm-sahil-kumar-sinhas-projects.vercel.app/sendquestionsmail", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ success: true, data: mailsToSend }),

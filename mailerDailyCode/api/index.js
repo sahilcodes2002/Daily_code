@@ -320,6 +320,16 @@ function htmlbodyofquestionsmail(user, userPosted, randomProblems, implementatio
     const current_date = new Date();
     const dateString = current_date.toLocaleDateString();
 
+    // Difficulty badge colors
+    const difficultyColors = {
+        'A': { bg: '#dcfce7', text: '#166534' }, // Green - Easy
+        'B': { bg: '#dbeafe', text: '#1e40af' }, // Blue - Medium-Easy
+        'C': { bg: '#fef9c3', text: '#854d0e' }, // Yellow - Medium
+        'D': { bg: '#fed7aa', text: '#c2410c' }, // Orange - Medium-Hard
+        'E': { bg: '#fecaca', text: '#dc2626' }, // Red - Hard
+        'F': { bg: '#f3e8ff', text: '#7c3aed' }, // Purple - Very Hard
+    };
+
     const renderProblems = (title, problems) => {
         if (!problems || problems.length === 0) return '';
         const listItems = problems.map(p => {
@@ -329,10 +339,24 @@ function htmlbodyofquestionsmail(user, userPosted, randomProblems, implementatio
                    </div>`
                 : '';
             
+            // Difficulty badge
+            const difficulty = p.difficulty?.toUpperCase() || '';
+            const diffColor = difficultyColors[difficulty] || { bg: '#e5e7eb', text: '#374151' };
+            const diffBadge = difficulty 
+                ? `<span style="background-color: ${diffColor.bg}; color: ${diffColor.text}; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-left: 8px;">${difficulty}</span>`
+                : '';
+
+            // Platform badge
+            const platform = p.platform || '';
+            const platformBadge = platform 
+                ? `<span style="background-color: #1f2937; color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-left: 5px; text-transform: capitalize;">${platform}</span>`
+                : '';
+            
             return `
             <div style="margin-bottom: 15px; padding: 15px; border: 1px solid #e0e0e0; border-radius: 8px; background-color: #fff;">
                 <div style="font-size: 16px; font-weight: 600; margin-bottom: 5px;">
                     <a href="${p.link}" style="text-decoration: none; color: #2563eb;">${p.title}</a>
+                    ${diffBadge}${platformBadge}
                 </div>
                 ${tagsHtml}
             </div>
@@ -364,8 +388,8 @@ function htmlbodyofquestionsmail(user, userPosted, randomProblems, implementatio
                 <p style="color: #4b5563;">Here are your selected problems for today. Keep up the momentum!</p>
 
                 ${renderProblems('🎯 Your Posted Problems', userPosted)}
-                ${renderProblems('🎲 Random Picks', randomProblems)}
-                ${renderProblems('🛠️ Implementation Practice', implementationProblems)}
+                ${renderProblems('🎲 Pick based on your preferences', randomProblems)}
+                ${renderProblems('🛠️ Extra Hustle', implementationProblems)}
                 ${renderProblems('⭐ Starred Problems', starredProblems)}
 
                 <div style="text-align: center; margin-top: 40px; margin-bottom: 20px;">
